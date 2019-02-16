@@ -40,94 +40,94 @@ def pass_defaults(func):
 
 
 def _notify_stream_iter_closed():
-	pass  # Mocked by unit tests to determine check for proper closing
+    pass  # Mocked by unit tests to determine check for proper closing
 
 
 class StreamDecodeIterator(object):
-	"""
-	Wrapper around `Iterable` that allows the iterable to be used in a
-	context manager (`with`-statement) allowing for easy cleanup.
-	"""
-	def __init__(self, response, parser):
-		self._response = response
-		self._parser   = parser
-		self._response_iter = response.iter_content(chunk_size=None)
-		self._parser_iter   = None
+    """
+    Wrapper around `Iterable` that allows the iterable to be used in a
+    context manager (`with`-statement) allowing for easy cleanup.
+    """
+    def __init__(self, response, parser):
+        self._response = response
+        self._parser   = parser
+        self._response_iter = response.iter_content(chunk_size=None)
+        self._parser_iter   = None
 
-	def __iter__(self):
-		return self
+    def __iter__(self):
+        return self
 
-	def __next__(self):
-		while True:
-			# Try reading for current parser iterator
-			if self._parser_iter is not None:
-				try:
-					result = next(self._parser_iter)
-					
-					# Detect late error messages that occured after some data
-					# has already been sent
-					if isinstance(result, dict) and result.get("Type") == "error":
-						msg = result["Message"]
-						raise exceptions.PartialErrorResponse(msg, None, [])
-					
-					return result
-				except StopIteration:
-					self._parser_iter = None
+    def __next__(self):
+        while True:
+            # Try reading for current parser iterator
+            if self._parser_iter is not None:
+                try:
+                    result = next(self._parser_iter)
 
-					# Forward exception to caller if we do not expect any
-					# further data
-					if self._response_iter is None:
-						raise
+                    # Detect late error messages that occured after some data
+                    # has already been sent
+                    if isinstance(result, dict) and result.get("Type") == "error":
+                        msg = result["Message"]
+                        raise exceptions.PartialErrorResponse(msg, None, [])
 
-			try:
-				data = next(self._response_iter)
+                    return result
+                except StopIteration:
+                    self._parser_iter = None
 
-				# Create new parser iterator using the newly recieved data
-				self._parser_iter = iter(self._parser.parse_partial(data))
-			except StopIteration:
-				# No more data to receive – destroy response iterator and
-				# iterate over the final fragments returned by the parser
-				self._response_iter = None
-				self._parser_iter   = iter(self._parser.parse_finalize())
+                    # Forward exception to caller if we do not expect any
+                    # further data
+                    if self._response_iter is None:
+                        raise
 
-	#PY2: Old iterator syntax
-	def next(self):
-		return self.__next__()
+            try:
+                data = next(self._response_iter)
 
-	def __enter__(self):
-		return self
+                # Create new parser iterator using the newly recieved data
+                self._parser_iter = iter(self._parser.parse_partial(data))
+            except StopIteration:
+                # No more data to receive – destroy response iterator and
+                # iterate over the final fragments returned by the parser
+                self._response_iter = None
+                self._parser_iter   = iter(self._parser.parse_finalize())
 
-	def __exit__(self, *a):
-		self.close()
+    #PY2: Old iterator syntax
+    def next(self):
+        return self.__next__()
 
-	def close(self):
-		# Clean up any open iterators first
-		if self._response_iter is not None:
-			self._response_iter.close()
-		if self._parser_iter is not None:
-			self._parser_iter.close()
-		self._response_iter = None
-		self._parser_iter   = None
+    def __enter__(self):
+        return self
 
-		# Clean up response object and parser
-		if self._response is not None:
-			self._response.close()
-		self._response = None
-		self._parser   = None
+    def __exit__(self, *a):
+        self.close()
 
-		_notify_stream_iter_closed()
+    def close(self):
+        # Clean up any open iterators first
+        if self._response_iter is not None:
+            self._response_iter.close()
+        if self._parser_iter is not None:
+            self._parser_iter.close()
+        self._response_iter = None
+        self._parser_iter   = None
+
+        # Clean up response object and parser
+        if self._response is not None:
+            self._response.close()
+        self._response = None
+        self._parser   = None
+
+        _notify_stream_iter_closed()
 
 
 def stream_decode_full(response, parser):
-	with StreamDecodeIterator(response, parser) as response_iter:
-		# Collect all responses
-		result = list(response_iter)
-		
-		# Return byte streams concatenated into one message, instead of split
-		# at arbitrary boundaries
-		if parser.is_stream:
-			return b"".join(result)
-		return result
+    with StreamDecodeIterator(response, parser) as response_iter:
+        # Collect all responses
+        result = list(response_iter)
+
+        # Return byte streams concatenated into one message, instead of split
+        # at arbitrary boundaries
+        if parser.is_stream:
+            return b"".join(result)
+        return result
 
 
 class HTTPClient(object):
@@ -165,12 +165,12 @@ class HTTPClient(object):
                 return self._session.request(*args, **kwargs)
             else:
                 return requests.request(*args, **kwargs)
+        except (requests.ConnectTimeout, requests.Timeout) as error:
+            six.raise_from(exceptions.TimeoutError(error), error)
         except requests.ConnectionError as error:
             six.raise_from(exceptions.ConnectionError(error), error)
         except http_client.HTTPException as error:
             six.raise_from(exceptions.ProtocolError(error), error)
-        except requests.Timeout as error:
-            six.raise_from(exceptions.TimeoutError(error), error)
 
     def _do_raise_for_status(self, response):
         try:
@@ -197,10 +197,10 @@ class HTTPClient(object):
                 six.raise_from(exceptions.StatusError(error), error)
 
     def _request(self, method, url, params, parser, stream=False, files=None,
-                 headers={}, data=None):
+                 headers={}, data=None, timeout=120):
         # Do HTTP request (synchronously)
         res = self._do_request(method, url, params=params, stream=stream,
-                               files=files, headers=headers, data=data)
+                               files=files, headers=headers, data=data, timeout=timeout)
 
         # Raise exception for response status
         # (optionally incorpating the response message, if applicable)
@@ -216,7 +216,7 @@ class HTTPClient(object):
     @pass_defaults
     def request(self, path,
                 args=[], files=[], opts={}, stream=False,
-                decoder=None, headers={}, data=None):
+                decoder=None, headers={}, data=None, timeout=120):
         """Makes an HTTP request to the IPFS daemon.
 
         This function returns the contents of the HTTP response from the IPFS
@@ -244,6 +244,10 @@ class HTTPClient(object):
             The encoder to use to parse the HTTP response
         kwargs : dict
             Additional arguments to pass to :mod:`requests`
+        timeout : float
+            How many seconds to wait for the server to send data
+            before giving up
+            Defaults to 120
         """
         url = self.base + path
 
@@ -259,11 +263,11 @@ class HTTPClient(object):
         parser = encoding.get_encoding(decoder if decoder else "none")
 
         return self._request(method, url, params, parser, stream,
-                             files, headers, data)
+                             files, headers, data, timeout=timeout)
 
     @pass_defaults
     def download(self, path, args=[], filepath=None, opts={},
-                 compress=True, **kwargs):
+                 compress=True, timeout=120, **kwargs):
         """Makes a request to the IPFS daemon to download a file.
 
         Downloads a file or files from IPFS into the current working
@@ -292,6 +296,10 @@ class HTTPClient(object):
         compress : bool
             Whether the downloaded file should be GZip compressed by the
             daemon before being sent to the client
+        timeout : float
+            How many seconds to wait for the server to send data
+            before giving up
+            Defaults to 120
         kwargs : dict
             Additional arguments to pass to :mod:`requests`
         """
@@ -312,7 +320,7 @@ class HTTPClient(object):
         method = 'get'
 
         res = self._do_request(method, url, params=params, stream=True,
-                               **kwargs)
+                               timeout=timeout, **kwargs)
 
         self._do_raise_for_status(res)
 
